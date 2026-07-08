@@ -35,7 +35,7 @@ serde_yaml = "0.9"
 similar = "2"
 # native-tls backend: rustls rejects servers that close the connection without a
 # TLS close_notify (common with Google/OpenAI endpoints); native-tls tolerates it.
-ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
+ureq = { version = "3", default-features = false, features = ["native-tls", "gzip"] }
 native-tls = "0.2"
 
 [profile.release]
