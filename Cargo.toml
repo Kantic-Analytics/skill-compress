@@ -1,0 +1,44 @@
+[package]
+name = "skill-compress"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+authors = ["Kantic Analytics"]
+description = "A CLI for analyzing, minifying, and optimizing Agent Skill SKILL.md files."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Kantic-Analytics/skill-compress"
+homepage = "https://github.com/Kantic-Analytics/skill-compress"
+keywords = ["cli", "markdown", "skills", "minify", "llm"]
+categories = ["command-line-utilities", "development-tools"]
+include = [
+    "src/**",
+    "examples/**",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE",
+    "Makefile",
+    "README.md",
+    "SECURITY.md",
+]
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+similar = "2"
+# native-tls backend: rustls rejects servers that close the connection without a
+# TLS close_notify (common with Google/OpenAI endpoints); native-tls tolerates it.
+ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
+native-tls = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
