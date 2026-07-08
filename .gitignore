@@ -1,0 +1,33 @@
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Claude per-project state
+.claude/
+CLAUDE.md
+AGENT.md
+
+# Rust
+target
+**/*.rs.bk
+
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Project-specific
+.env
+skills
+input
+output/*
+
+# Misc
+*.log
+
+# Keep .gitkeep files
+!/**/.gitkeep
