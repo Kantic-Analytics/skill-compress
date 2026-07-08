@@ -155,7 +155,7 @@ pub fn judge_missing(
 
     let mut list = String::new();
     for (idx, item) in items.iter().enumerate() {
-        list.push_str(&format!("{idx}. {item}\n"));
+        list.push_str(&format!("{}. {}\n", idx, item));
     }
     let user_prompt = format!(
         "CANDIDATE document:\n---\n{}\n---\n\nItems not found verbatim ({} total):\n{}",
@@ -178,7 +178,7 @@ fn parse_verdicts(raw: &str) -> Result<Vec<JudgeVerdict>, AppError> {
         .rfind(']')
         .ok_or_else(|| AppError::new("LLM judge response JSON array was not closed", 4))?;
     let value: serde_json::Value = serde_json::from_str(&cleaned[start..=end])
-        .map_err(|error| AppError::new(format!("failed to parse LLM judge JSON: {error}"), 4))?;
+        .map_err(|error| AppError::new(format!("failed to parse LLM judge JSON: {}", error), 4))?;
     let array = value
         .as_array()
         .ok_or_else(|| AppError::new("LLM judge response was not a JSON array", 4))?;
@@ -294,7 +294,7 @@ fn call_openai_compatible(
 
     // Bind the auth header to a local that outlives the post_json borrow, rather
     // than leaking it for the lifetime of the process.
-    let authorization = config.api_key.as_ref().map(|key| format!("Bearer {key}"));
+    let authorization = config.api_key.as_ref().map(|key| format!("Bearer {}", key));
     let mut headers = vec![("content-type", "application/json")];
     if let Some(authorization) = &authorization {
         headers.push(("authorization", authorization.as_str()));
@@ -391,7 +391,8 @@ fn join_text_blocks(blocks: &serde_json::Value, field: &str) -> Option<String> {
 fn truncated_error(provider: &str, reason: &str) -> AppError {
     AppError::new(
         format!(
-            "{provider} response was truncated ({reason}); raise --max-output-tokens or split the skill into references/"
+            "{} response was truncated ({}); raise --max-output-tokens or split the skill into references/",
+            provider, reason
         ),
         4,
     )
@@ -403,7 +404,7 @@ fn truncated_error(provider: &str, reason: &str) -> AppError {
 /// native-tls (Secure Transport / schannel / OpenSSL) is used instead.
 fn build_agent() -> Result<ureq::Agent, AppError> {
     let connector = native_tls::TlsConnector::new()
-        .map_err(|error| AppError::new(format!("failed to initialize TLS: {error}"), 4))?;
+        .map_err(|error| AppError::new(format!("failed to initialize TLS: {}", error), 4))?;
     Ok(ureq::AgentBuilder::new()
         .tls_connector(std::sync::Arc::new(connector))
         .build())
@@ -442,7 +443,7 @@ fn post_json(
             // so unpack it ourselves. Retry only transient statuses (429/5xx).
             Err(ureq::Error::Status(code, response)) => {
                 if is_retryable_status(code) && attempt < MAX_ATTEMPTS {
-                    warn_retry(attempt, &format!("HTTP {code}"));
+                    warn_retry(attempt, &format!("HTTP {}", code));
                     std::thread::sleep(retry_backoff(attempt));
                     continue;
                 }
@@ -457,7 +458,7 @@ fn post_json(
                     continue;
                 }
                 return Err(AppError::new(
-                    redact_secrets(&format!("LLM request failed (transport): {transport}")),
+                    redact_secrets(&format!("LLM request failed (transport): {}", transport)),
                     4,
                 ));
             }
@@ -466,10 +467,10 @@ fn post_json(
 
     let text = response
         .into_string()
-        .map_err(|error| AppError::new(format!("failed to read LLM response: {error}"), 4))?;
+        .map_err(|error| AppError::new(format!("failed to read LLM response: {}", error), 4))?;
 
     serde_json::from_str(&text)
-        .map_err(|error| AppError::new(format!("failed to parse LLM JSON response: {error}"), 4))
+        .map_err(|error| AppError::new(format!("failed to parse LLM JSON response: {}", error), 4))
 }
 
 /// Transient HTTP statuses worth retrying: rate limits and server-side errors.
@@ -496,7 +497,8 @@ fn retry_backoff(attempt: u32) -> Duration {
 /// Note a retry on stderr so it never contaminates the stdout skill payload.
 fn warn_retry(attempt: u32, reason: &str) {
     eprintln!(
-        "warning: transient LLM failure ({reason}); retrying (attempt {attempt}/{MAX_ATTEMPTS})"
+        "warning: transient LLM failure ({}); retrying (attempt {}/{})",
+        reason, attempt, MAX_ATTEMPTS
     );
 }
 
@@ -505,12 +507,12 @@ fn warn_retry(attempt: u32, reason: &str) {
 /// sees *why* the call failed instead of a bare status code.
 fn http_status_error(code: u16, response: ureq::Response) -> AppError {
     let body = response.into_string().unwrap_or_default();
-    let mut message = format!("LLM request failed: HTTP {code}");
+    let mut message = format!("LLM request failed: HTTP {}", code);
     if let Some(hint) = status_hint(code) {
-        message.push_str(&format!(" — {hint}"));
+        message.push_str(&format!(" — {}", hint));
     }
     if let Some(detail) = extract_provider_error(&body) {
-        message.push_str(&format!(": {detail}"));
+        message.push_str(&format!(": {}", detail));
     } else if !body.trim().is_empty() {
         message.push_str(&format!(": {}", truncate(body.trim(), 500)));
     }
@@ -544,7 +546,7 @@ fn extract_provider_error(body: &str) -> Option<String> {
     if let Some(message) = error["message"].as_str() {
         // Gemini also carries a `status` (e.g. UNAVAILABLE); include it when present.
         return Some(match error["status"].as_str() {
-            Some(status) if !status.is_empty() => format!("{message} [{status}]"),
+            Some(status) if !status.is_empty() => format!("{} [{}]", message, status),
             _ => message.to_string(),
         });
     }
@@ -750,7 +752,7 @@ mod tests {
     #[test]
     fn detects_openai_reasoning_models() {
         for m in ["o1", "o1-mini", "o3", "o3-mini", "o4-mini"] {
-            assert!(super::is_openai_reasoning_model(m), "{m} is reasoning");
+            assert!(super::is_openai_reasoning_model(m), "{} is reasoning", m);
         }
         for m in [
             "gpt-4o",
@@ -759,7 +761,7 @@ mod tests {
             "openai",
             "mistral-small",
         ] {
-            assert!(!super::is_openai_reasoning_model(m), "{m} is not");
+            assert!(!super::is_openai_reasoning_model(m), "{} is not", m);
         }
     }
 
@@ -794,10 +796,10 @@ mod tests {
     #[test]
     fn retryable_status_covers_transient_only() {
         for code in [408, 429, 500, 502, 503, 504, 529] {
-            assert!(super::is_retryable_status(code), "{code} should retry");
+            assert!(super::is_retryable_status(code), "{} should retry", code);
         }
         for code in [200, 400, 401, 403, 404, 422] {
-            assert!(!super::is_retryable_status(code), "{code} must not retry");
+            assert!(!super::is_retryable_status(code), "{} must not retry", code);
         }
     }
 

@@ -359,9 +359,20 @@ fn replace_rule_with_reference(line: &str, id: &str) -> String {
 
 fn remove_decorative_blank_lines(lines: Vec<String>) -> Vec<String> {
     let mut output = Vec::with_capacity(lines.len());
+    // Fence-aware: blank lines inside a code fence are content, never decorative.
+    // Without this guard a blank line next to a fenced line that *looks* like a
+    // heading or rule (e.g. a Python `# comment` or a `---` divider in a snippet)
+    // would be stripped, silently altering the code block.
+    let mut in_fence = false;
 
     for (index, line) in lines.iter().enumerate() {
-        if line.is_empty() {
+        if is_fence_line(line) {
+            in_fence = !in_fence;
+            output.push(line.clone());
+            continue;
+        }
+
+        if !in_fence && line.is_empty() {
             let previous = output.last().map(String::as_str).unwrap_or_default();
             let next = lines.get(index + 1).map(String::as_str).unwrap_or_default();
 
@@ -463,6 +474,30 @@ mod tests {
         let output = minify_skill(input);
         assert!(output.contains("fn main() {   \n"));
         assert!(output.contains("Before\n"));
+    }
+
+    #[test]
+    fn preserves_blank_lines_inside_fences_next_to_comment_lines() {
+        // A blank line inside a fence sits next to `# Read a PDF`, which looks like an
+        // ATX heading. The decorative-blank pass must not strip it: fenced content is
+        // never altered, and dropping it would register as a fidelity loss.
+        let input = "Intro\n\n```python\nfrom pypdf import PdfReader\n\n# Read a PDF\nreader = PdfReader(\"x.pdf\")\n```\n";
+        let output = minify_skill(input);
+        assert!(
+            output.contains("from pypdf import PdfReader\n\n# Read a PDF"),
+            "blank line inside the fence was stripped:\n{output}"
+        );
+    }
+
+    #[test]
+    fn preserves_blank_line_before_divider_inside_fence() {
+        // A `---` line inside a fence is a code divider, not a Markdown rule.
+        let input = "Intro\n\n```text\nabove\n\n---\nbelow\n```\n";
+        let output = minify_skill(input);
+        assert!(
+            output.contains("above\n\n---\nbelow"),
+            "blank line inside the fence was stripped:\n{output}"
+        );
     }
 
     #[test]

@@ -178,7 +178,7 @@ fn validate_frontmatter(yaml: &str, diagnostics: &mut Vec<Diagnostic>) {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 code: "frontmatter.invalid_yaml".to_string(),
-                message: format!("Invalid YAML frontmatter: {error}"),
+                message: format!("Invalid YAML frontmatter: {}", error),
                 line: error.location().map(|location| location.line() + 1),
                 suggestion: Some("Fix YAML syntax before running --write.".to_string()),
             });
@@ -299,7 +299,7 @@ fn long_section_diagnostic(heading: &str, start: usize, count: usize) -> Diagnos
     Diagnostic {
         severity: Severity::Info,
         code: "section.possible_reference".to_string(),
-        message: format!("Section '{heading}' spans {count} lines."),
+        message: format!("Section '{}' spans {} lines.", heading, count),
         line: Some(start),
         suggestion: Some("Consider moving deep reference content to references/.".to_string()),
     }

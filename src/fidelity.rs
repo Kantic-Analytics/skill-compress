@@ -311,8 +311,9 @@ fn strip_reference_marker(text: &str) -> &str {
 }
 
 /// Semantics-preserving normalization: absorb cosmetic differences (dash style,
-/// whitespace, trailing period, the minifier's `(BR-xxx)` marker) while keeping
-/// wording and identifiers significant, so paraphrases still register as misses.
+/// bold `**` markers, whitespace, trailing period, the minifier's `(BR-xxx)` marker)
+/// while keeping wording and identifiers significant, so paraphrases still register
+/// as misses.
 fn normalize(text: &str) -> String {
     let dash_normalized: String = text
         .chars()
@@ -324,7 +325,11 @@ fn normalize(text: &str) -> String {
             }
         })
         .collect();
-    let without_prefix = strip_reference_prefix(&dash_normalized);
+    // The deterministic minifier strips `**` bold markers from ATX headings
+    // (`# **Purpose**` -> `# Purpose`), so absorb them here to keep that rewrite
+    // from reading as a dropped heading. Applied symmetrically to both sides.
+    let without_bold = dash_normalized.replace("**", "");
+    let without_prefix = strip_reference_prefix(&without_bold);
     let without_ref = strip_reference_marker(without_prefix);
     without_ref
         .split_whitespace()
@@ -339,7 +344,7 @@ fn first_line_snippet(text: &str) -> String {
     let line = text.lines().next().unwrap_or_default().trim();
     if line.chars().count() > 60 {
         let truncated: String = line.chars().take(60).collect();
-        format!("{truncated}…")
+        format!("{}…", truncated)
     } else {
         line.to_string()
     }
@@ -408,6 +413,16 @@ mod tests {
         let candidate = "---\nname: s\n---\n- [BR-001] Always update docs.\n- See BR-001.\n";
         let report = verify(original, candidate);
         assert_eq!(report.missing.len(), 0);
+    }
+
+    #[test]
+    fn bold_heading_markers_are_absorbed() {
+        // The minifier strips `**` from ATX headings; the gate must treat the
+        // stripped heading as preserved, not as a dropped section.
+        let original = "---\nname: s\n---\n# **Purpose**\n## **Global Rules** *(new in v0.1.2)*\n";
+        let candidate = "---\nname: s\n---\n# Purpose\n## Global Rules *(new in v0.1.2)*\n";
+        let report = verify(original, candidate);
+        assert_eq!(report.missing.len(), 0, "bold markers must normalize away");
     }
 
     #[test]

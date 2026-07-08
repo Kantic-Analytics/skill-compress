@@ -27,7 +27,7 @@ SAMPLE_LLM_MODEL ?= gpt-4o-mini
 .PHONY: help fmt fmt-check lint lint-fix audit check build build-release run \
         run-release test verify clean setup-target teardown-target \
         sample sample-json sample-diff sample-runtime sample-runtime-diff sample-verify \
-        sample-verify-llm sample-all
+        sample-verify-llm sample-all benchmark
 
 help: ## Show this help.
 	@echo "Usage:"
@@ -199,3 +199,13 @@ sample-verify-llm: sample ## Run the advisory OpenAI --verify-llm judge over the
 	cargo run -- "$(SAMPLE_INPUT)" --verify "$(SAMPLE_VERIFY_CANDIDATE)" --verify-llm --provider openai --model "$(SAMPLE_LLM_MODEL)"
 
 sample-all: sample sample-json sample-diff sample-runtime sample-runtime-diff ## Generate all deterministic sample outputs.
+
+#########################
+# Benchmark
+#########################
+
+benchmark: ## Render the compression-accuracy benchmark (fidelity vs size) to output/benchmark.html
+	@mkdir -p output
+	@echo "$(BLUE)Running compression-accuracy benchmark...$(RESET)"
+	python3 benchmark/run_benchmark.py
+	@echo "$(GREEN)✓ Open output/benchmark.html$(RESET)"

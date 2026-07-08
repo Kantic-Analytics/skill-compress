@@ -45,6 +45,17 @@ pub struct Cli {
     #[arg(long, help_heading = "Output")]
     pub write: bool,
 
+    /// Preview what --write would do without modifying the file. Reports whether the
+    /// file would change and by how much; takes precedence over --write so a stray
+    /// --write never mutates when --dry-run is set.
+    #[arg(long, help_heading = "Output")]
+    pub dry_run: bool,
+
+    /// Overwrite even when the target is a tracked file with uncommitted git changes.
+    /// Without this, --write refuses to clobber unsaved work (exit code 5).
+    #[arg(long, visible_alias = "allow-dirty", help_heading = "Output")]
+    pub force: bool,
+
     /// Fail when the deterministic minified output differs or diagnostics contain errors.
     #[arg(long, help_heading = "Output")]
     pub check: bool,
@@ -145,9 +156,19 @@ pub fn run_with_cli(cli: Cli) -> Result<(), AppError> {
         return Ok(());
     }
 
+    if cli.dry_run {
+        print_dry_run_result(&cli.path, &input, &minified, changed);
+        return Ok(());
+    }
+
     if cli.write {
         if changed {
-            fs::write(&cli.path, minified)?;
+            if !cli.force {
+                if let Some(reason) = write_guard_reason(&cli.path) {
+                    return Err(AppError::new(reason, 5));
+                }
+            }
+            atomic_write(&cli.path, &minified)?;
         }
         print_write_result(&cli.path, changed);
         return Ok(());
@@ -259,7 +280,7 @@ fn print_judge_report(
         };
         println!("  [{}] {}", mark, atom.text);
         if !evidence.is_empty() {
-            println!("        ↳ {evidence}");
+            println!("        ↳ {}", evidence);
         }
     }
     if atoms.len() < total_missing {
@@ -270,7 +291,8 @@ fn print_judge_report(
         );
     }
     println!(
-        "  judge summary: {preserved} paraphrased-equivalent, {weakened} weakened, {lost} lost"
+        "  judge summary: {} paraphrased-equivalent, {} weakened, {} lost",
+        preserved, weakened, lost
     );
 }
 
@@ -337,6 +359,88 @@ fn print_write_result(path: &Path, changed: bool) {
     }
 }
 
+/// Refuse to overwrite a tracked file that has uncommitted git changes, so `--write`
+/// can never clobber unsaved work the user could not otherwise recover. Best-effort:
+/// if `git` is unavailable, the path is not in a repo, or the file is untracked or
+/// ignored, we return `None` (allowed) — git has nothing to restore in those cases,
+/// and the write is the deterministic cleanup the user explicitly asked for.
+fn write_guard_reason(path: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--"])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None; // not a git work tree, or git unavailable: cannot check.
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let code = porcelain_block_code(&stdout)?;
+    Some(format!(
+        "{} has uncommitted git changes (status {code}); commit or stash them, or pass --force to overwrite",
+        path.display()
+    ))
+}
+
+/// Given `git status --porcelain -- <path>` output, return the two-letter status code
+/// when a write should be blocked. Empty output (clean or ignored) and untracked
+/// (`??`) are safe and yield `None`; any other status (modified, staged, renamed, …)
+/// is uncommitted work and yields its code.
+fn porcelain_block_code(stdout: &str) -> Option<String> {
+    let line = stdout.lines().next()?;
+    let code = line.get(..2).unwrap_or("");
+    let trimmed = code.trim();
+    if trimmed.is_empty() || code == "??" {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Write `contents` to `path` atomically: write a sibling temp file on the same
+/// filesystem, then rename it over the target. A crash or panic mid-write can then
+/// never leave a half-written or truncated SKILL.md in place.
+fn atomic_write(path: &Path, contents: &str) -> Result<(), AppError> {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "skill".to_string());
+    let tmp_name = format!(".{file_name}.skill-compress-{}.tmp", std::process::id());
+    let tmp_path = match path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(parent) => parent.join(tmp_name),
+        None => PathBuf::from(tmp_name),
+    };
+
+    fs::write(&tmp_path, contents)?;
+    if let Err(error) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AppError::from(error));
+    }
+    Ok(())
+}
+
+/// Report what `--write` would do, without touching the file.
+fn print_dry_run_result(path: &Path, before: &str, after: &str, changed: bool) {
+    if !changed {
+        println!(
+            "dry-run: {} already clean; --write would make no changes",
+            path.display()
+        );
+        return;
+    }
+    println!(
+        "dry-run: --write would update {} ({} -> {} lines, {} -> {} chars)",
+        path.display(),
+        before.lines().count(),
+        after.lines().count(),
+        before.chars().count(),
+        after.chars().count(),
+    );
+    println!("  no file was modified; drop --dry-run to apply, or use --diff to see the changes");
+}
+
 fn print_diff(before: &str, after: &str) {
     let diff = similar::TextDiff::from_lines(before, after);
     print!(
@@ -372,14 +476,14 @@ fn print_human_report(report: &skill::Report) {
     for diagnostic in &report.diagnostics {
         let line = diagnostic
             .line
-            .map(|value| format!(" line {value}"))
+            .map(|value| format!(" line {}", value))
             .unwrap_or_default();
         println!(
             "- {:?} [{}]{}: {}",
             diagnostic.severity, diagnostic.code, line, diagnostic.message
         );
         if let Some(suggestion) = &diagnostic.suggestion {
-            println!("  suggestion: {suggestion}");
+            println!("  suggestion: {}", suggestion);
         }
     }
 }
@@ -387,4 +491,76 @@ fn print_human_report(report: &skill::Report) {
 #[derive(Debug, Serialize)]
 pub struct JsonError<'a> {
     pub error: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dry_run_previews_without_writing_then_write_applies() {
+        // A file the deterministic minifier would change (extra blank lines).
+        let original = "---\nname: s\ndescription: d\n---\n\n\n# Title\n\n\nBody\n";
+        let path = std::env::temp_dir().join("skill_compress_dry_run_test.md");
+        std::fs::write(&path, original).unwrap();
+
+        // --dry-run (even alongside --write) must leave the file byte-for-byte intact.
+        let cli = Cli::parse_from([
+            "skill-compress",
+            path.to_str().unwrap(),
+            "--write",
+            "--dry-run",
+        ]);
+        run_with_cli(cli).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "--dry-run must not modify the file"
+        );
+
+        // A real --write does change it.
+        let cli = Cli::parse_from(["skill-compress", path.to_str().unwrap(), "--write"]);
+        run_with_cli(cli).unwrap();
+        assert_ne!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "--write should apply the minified output"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn porcelain_code_blocks_only_uncommitted_tracked_changes() {
+        // Clean/ignored (no line) and untracked are safe to overwrite.
+        assert_eq!(porcelain_block_code(""), None);
+        assert_eq!(porcelain_block_code("?? brand-new.md\n"), None);
+        // Any real status (unstaged, staged, added, renamed) blocks with its code.
+        assert_eq!(porcelain_block_code(" M SKILL.md\n").as_deref(), Some("M"));
+        assert_eq!(porcelain_block_code("M  SKILL.md\n").as_deref(), Some("M"));
+        assert_eq!(porcelain_block_code("A  SKILL.md\n").as_deref(), Some("A"));
+        assert_eq!(porcelain_block_code("R  a -> b\n").as_deref(), Some("R"));
+    }
+
+    #[test]
+    fn atomic_write_replaces_contents_and_leaves_no_temp() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("skill_compress_atomic_test.md");
+        std::fs::write(&path, "old contents").unwrap();
+
+        atomic_write(&path, "new contents\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new contents\n");
+
+        // No leftover temp sibling from the atomic rename.
+        let leftover = std::fs::read_dir(&dir).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("skill_compress_atomic_test.md.skill-compress-")
+        });
+        assert!(!leftover, "atomic_write left a temp file behind");
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

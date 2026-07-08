@@ -21,8 +21,10 @@ The tool is deterministic and local. There is no LLM rewrite mode; the only LLM 
   - assign `BR-xxx` references to repeated exact-match business rules;
   - normalize the final newline.
 - Produce human reports, JSON reports, and unified diffs.
+- Preview a rewrite with `--dry-run`, or apply it in place with `--write` — hardened by an atomic write and a git-dirty guard (see [Write safety](#usage)).
 - Verify that a compressed candidate preserved every must-preserve atom (`--verify`) — a deterministic fidelity gate that makes no LLM call.
 - Optionally adjudicate the residue with an experimental, advisory LLM-as-judge (`--verify-llm`) via Anthropic, OpenAI, Mistral, Gemini, or local OpenAI-compatible endpoints.
+- Render an offline, reproducible fidelity-vs-size benchmark to HTML (`make benchmark`).
 
 ## Installation
 
@@ -121,9 +123,19 @@ cargo run -- examples/sample-skill.md
 ```bash
 cargo run -- --diff examples/sample-skill.md          # unified diff, no write
 cargo run -- --check examples/sample-skill.md         # CI mode: nonzero if it would change
+cargo run -- --dry-run examples/sample-skill.md       # preview what --write would do, no write
 cargo run -- --report json examples/sample-skill.md   # machine-readable report
 make sample                                            # copy to output/, then --write in place
 ```
+
+`--dry-run` takes precedence over `--write`, so `--write --dry-run` always previews and never mutates.
+
+**Write safety.** `--write` mutates in place, so it is hardened two ways:
+
+- **Atomic write** — output is written to a sibling temp file and `rename`d over the target, so a crash mid-write can never leave a truncated `SKILL.md`.
+- **Git-dirty guard** — `--write` refuses (exit code `5`) to overwrite a *tracked* file that has uncommitted git changes, so it can't clobber unsaved work. Untracked, ignored, and non-repo files are written directly (git has nothing to restore, and the change is the deterministic cleanup you asked for). Override with `--force` (alias `--allow-dirty`).
+
+Because the minifier is deterministic and idempotent, re-running `--write` on an already-clean file is a no-op. The default mode remains read-only reporting — mutation is always explicit.
 
 **Compression** — optionally strip non-runtime sections (all off by default):
 
@@ -178,6 +190,7 @@ make sample-runtime-diff
 make sample-verify
 make sample-verify-llm
 make sample-all
+make benchmark
 ```
 
 The sample targets use `examples/sample-skill.md` and write generated files to `output/`:
@@ -216,6 +229,24 @@ cargo run -- output/sample-skill.min.md
 cargo run -- --check output/sample-skill.min.md
 ```
 
+### Accuracy benchmark (HTML)
+
+`make benchmark` renders an offline, reproducible report of **fidelity vs. size
+reduction** across every deterministic mode, for each `examples/*.md` and
+`input/*.md` skill, to `output/benchmark.html`:
+
+```bash
+make benchmark          # or: python3 benchmark/run_benchmark.py
+open output/benchmark.html
+```
+
+It shells out only to `cargo run` (deterministic minifier + `--verify` gate) —
+no network call, no LLM judge — and needs `python3` (stdlib only). On the
+bundled sample the deterministic min stays at `388/388` atoms (~4% tokens
+saved) while `--runtime-only` trades fidelity for reach (`346/388`, ~15% tokens
+saved, dropping optional changelog/example atoms by design). See
+[`benchmark/README.md`](benchmark/README.md) for details.
+
 ## Verifying Fidelity
 
 Any compressed candidate (deterministic or runtime-only) can be checked against the original with a deterministic gate that makes no LLM call. It extracts the original's *must-preserve atoms* — frontmatter keys, section headings, rule and acceptance bullets, and fenced code blocks — and reports every one the candidate does not contain, exiting nonzero if any is missing:
@@ -231,7 +262,7 @@ SAMPLE_VERIFY_CANDIDATE=output/sample-skill.runtime.md make sample-verify
 
 The deterministic minifier is faithful by construction: `make sample-verify` reports `388/388` on `output/sample-skill.min.md`.
 
-Matching is verbatim after light normalization (whitespace, dash style, and the deterministic minifier's own `[BR-001]`/`See BR-001.` markers are absorbed), so a *paraphrased* rule is reported as missing on purpose — reworded constraints are unverified drift, not proven equivalents.
+Matching is verbatim after light normalization (whitespace, dash style, `**` bold markers the minifier strips from headings, and the deterministic minifier's own `[BR-001]`/`See BR-001.` markers are absorbed), so a *paraphrased* rule is reported as missing on purpose — reworded constraints are unverified drift, not proven equivalents.
 
 An **experimental** LLM-as-judge layer can adjudicate the residue — deciding whether each deterministically-missing atom is paraphrased-equivalent, weakened, or truly lost. It sends the candidate to the configured provider and is advisory only: the deterministic result stays authoritative and drives the exit code.
 
@@ -253,6 +284,7 @@ src/
   skill.rs      SKILL.md analysis and reports
   fidelity.rs   deterministic fidelity gate (--verify)
   llm.rs        provider-neutral LLM calls
+benchmark/      fidelity-vs-size benchmark generator (run_benchmark.py)
 examples/       public sample files
 output/         local generated sample outputs
 ```
